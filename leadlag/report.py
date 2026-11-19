@@ -121,7 +121,7 @@ def scan(root: str, t0: float, t1: float, clock: str) -> dict:
             elif c == "instruments":
                 S["rule"] = n["f"].get("ruleType")
             elif c == "meta":
-                S["growth"] = n["f"].get("growthMode")
+                S["growth"] = n["f"].get("growthMode") or "off"
     return S
 
 
@@ -165,7 +165,8 @@ def raw_sections(S: dict, t0: float, t1: float, okx_feed: str, hl_feed: str) -> 
             s, d["msgs"], d["bbo"], d["trade"], age, d["down"], med(d["rtt_ws"]), med(d["rtt_app"]), med(d["lat"])))
     out.append("  ping = market-data round trip from this server (half of it is one way). It is not an order round trip.")
     conv = "unknown" if S["rule"] is None else ("pre_conversion" if S["rule"] == "pre_market" else "post_conversion")
-    out += ["", "STATE  OKX ruleType=%s (%s)   Hyperliquid growthMode=%s" % (S["rule"], conv, S["growth"])]
+    seen = lambda v: v if v is not None else "not polled in this window"   # polled every 1 and 5 minutes
+    out += ["", "STATE  OKX ruleType=%s (%s)   Hyperliquid growthMode=%s" % (seen(S["rule"]), conv, seen(S["growth"]))]
 
     n = int((t1 - t0) // GRID_MS)
     grids = {f: _grid(v, t0, n) for f, v in S["mids"].items() if len(v) > 100}
