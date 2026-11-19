@@ -4,10 +4,12 @@ The owner runs the bots and is not a programmer or a quant: explain in plain lan
 a number means when quoting one. A separate research project (the owner's "Omnibook research"
 Claude project) proposes changes; coding sessions here build and test them.
 
-Reference documents, kept in that research project (ask the owner to paste them if needed):
-the Omnibook project instructions, `OMNIBOOK.md`, `OMNIBOOK_MAINNET.md`, `OMNIBOOK_PLAYBOOK.md`,
-`OMNIBOOK_VERSIONS.md`, and the report *Upgrading a Hawkes/Avellaneda-Stoikov Bot to BTC Options
-Market Making*. Refer to them when upgrading any bot.
+Reference documents. Read the relevant one before upgrading any bot:
+
+- `docs/RESEARCH_REPORT.md`: the full report *Upgrading a Hawkes/Avellaneda-Stoikov Bot to BTC
+  Options Market Making* (formulas, fee figures, build order, caveats, sources).
+- Kept only in the research project (ask the owner to paste them if needed): `OMNIBOOK.md`,
+  `OMNIBOOK_MAINNET.md`, `OMNIBOOK_PLAYBOOK.md`, `OMNIBOOK_VERSIONS.md`.
 
 ## Standards for every change and every result reported
 
@@ -32,7 +34,7 @@ Market Making*. Refer to them when upgrading any bot.
 - Shadow and recording code places no orders. Live trading needs the owner's explicit go-ahead.
 - If unsure whether something is a real exchange constraint, say so and suggest asking the exchange.
 
-## The research report, ranked upgrades (for options market making)
+## The research report, ranked upgrades (summary; details in `docs/RESEARCH_REPORT.md`)
 
 1. Arbitrage-free SSVI/eSSVI fair-vol surface; quote in vol, convert to premium when sending.
 2. Inventory skew by portfolio vega/gamma in tenor buckets (Baldacci-Bergault-Gueant), not contract count.
