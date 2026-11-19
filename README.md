@@ -125,7 +125,6 @@ orders cannot take, and 3% away should never fill; if one does, the probe says s
 ```bash
 cd ~/li && .venv/bin/pip install -q -r requirements-live.txt && echo installed #
 read -rs -p "Paste the API wallet PRIVATE KEY, then Enter: " K; (umask 077; printf '%s' "$K" > ~/.hl_api_key); unset K; echo; echo saved #
-read -r -p "Paste your MAIN account address (0x...), then Enter: " A; (umask 077; printf '%s' "$A" > ~/.hl_account_address); unset A; echo saved #
 cd ~/li && .venv/bin/python -m leadlag.hl_probe #          shows the plan, sends nothing
 cd ~/li && .venv/bin/python -m leadlag.hl_probe --yes #    runs it
 ```

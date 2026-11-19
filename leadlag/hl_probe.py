@@ -8,6 +8,9 @@ cancels it, and repeats. Post-only means it can never take; 3% away means it sho
 It measures how long an order takes to reach Hyperliquid's book from this server, which is the
 delay the shadow test has to assume.
 
+It tries two ways of sending (a fresh HTTPS request, and one open websocket) and reports both.
+The account is looked up from the API wallet itself, so no address file is needed.
+
 The API wallet key is read from a file on this server (default ~/.hl_api_key, owner-only
 permissions). It is never printed, logged or sent anywhere except as a signature to Hyperliquid.
 """
@@ -41,16 +44,25 @@ def read_secret(path: str) -> str:
     return k
 
 
-def read_address(path: str) -> str:
-    path = os.path.expanduser(path)
-    if not os.path.exists(path):
-        sys.exit("address file %s not found (see README: 'Order round-trip probe')" % path)
-    a = open(path).read().strip()
-    if len(a) == 84 and a[:42] == a[42:]:
-        a = a[:42]
-    if len(a) != 42 or not a.startswith("0x"):
-        sys.exit("%s does not hold a 42-character account address starting with 0x" % path)
-    return a
+class WsPost:
+    """Sends signed actions over Hyperliquid's websocket instead of a new HTTPS request each time."""
+
+    def __init__(self, url: str):
+        import websocket
+        self.ws = websocket.create_connection(url.replace("https://", "wss://") + "/ws", timeout=10)
+        self.id = 0
+
+    def __call__(self, url_path: str, payload):
+        import json
+        self.id += 1
+        self.ws.send(json.dumps({"method": "post", "id": self.id, "request": {"type": "action", "payload": payload}}))
+        while True:
+            m = json.loads(self.ws.recv())
+            if m.get("channel") == "post" and m["data"]["id"] == self.id:
+                r = m["data"]["response"]
+                return r["payload"] if r.get("type") == "action" else {"status": "err", "response": r.get("payload")}
+            if m.get("channel") == "error":
+                return {"status": "err", "response": m.get("data")}
 
 
 def sig5(px: float, max_dec: int) -> float:
@@ -69,7 +81,7 @@ def main() -> None:
     ap.add_argument("--yes", action="store_true", help="actually place and cancel the orders")
     ap.add_argument("--n", type=int, default=20, help="how many place/cancel rounds (max %d)" % MAX_N)
     ap.add_argument("--key-file", default="~/.hl_api_key")
-    ap.add_argument("--address-file", default="~/.hl_account_address")
+    ap.add_argument("--transport", choices=("both", "http", "ws"), default="both")
     a = ap.parse_args()
     n = max(1, min(a.n, MAX_N))
 
@@ -97,9 +109,15 @@ def main() -> None:
 
     from eth_account import Account
     from hyperliquid.exchange import Exchange
-    address = read_address(a.address_file)
     wallet = Account.from_key(read_secret(a.key_file))
-    ex = Exchange(wallet, url, account_address=address, perp_dexs=["", DEX])
+    role = info.post("/info", {"type": "userRole", "user": wallet.address})
+    if role.get("role") == "agent":            # an API wallet: orders and balances belong to its owner
+        address = role["data"]["user"]
+    elif role.get("role") in ("user", "subAccount"):
+        address = wallet.address
+    else:
+        sys.exit("Hyperliquid does not know this key (role: %s). Is the API wallet approved? Nothing was sent." % role.get("role"))
+    print("account found for this API wallet. Open orders and position are checked on that account.")
 
     def position() -> float:
         for p in info.user_state(address, DEX).get("assetPositions", []):
@@ -108,34 +126,44 @@ def main() -> None:
         return 0.0
 
     pos0 = position()
-    place_rt, to_book, cancel_rt, live = [], [], [], []
+    res, live = {}, []
+    modes = ["http", "ws"] if a.transport == "both" else [a.transport]
     try:
-        for i in range(n):
-            t0 = time.time()
-            r = ex.order(COIN, True, sz, px, {"limit": {"tif": "Alo"}})
-            t1 = time.time()
-            try:
-                stt = r["response"]["data"]["statuses"][0]
-            except (KeyError, TypeError, IndexError):
-                sys.exit("order was not accepted: %s" % str(r)[:300])
-            if "resting" not in stt:
-                sys.exit("order was not accepted: %s" % str(stt)[:300])
-            oid = stt["resting"]["oid"]
-            live.append(oid)
-            o = info.query_order_by_oid(address, oid)
-            ts = o.get("order", {}).get("order", {}).get("timestamp")     # the block that took the order
-            c0 = time.time()
-            ex.cancel(COIN, oid)
-            c1 = time.time()
-            live.remove(oid)
-            place_rt.append((t1 - t0) * 1000)
-            cancel_rt.append((c1 - c0) * 1000)
-            if ts:
-                to_book.append(ts - t0 * 1000)
-            print("  round %2d: confirmed in %4.0f ms, reached the book %s ms after sending, cancel %4.0f ms" % (
-                i + 1, place_rt[-1], "%4.0f" % to_book[-1] if ts else "   ?", cancel_rt[-1]))
-            time.sleep(2.0)
+        for mode in modes:
+            ex = Exchange(wallet, url, account_address=address, perp_dexs=["", DEX])
+            if mode == "ws":
+                ex.post = WsPost(url)
+            place_rt, to_book, cancel_rt, cancel_book = [], [], [], []
+            res[mode] = (place_rt, to_book, cancel_rt, cancel_book)
+            print("\nvia %s" % ("a fresh HTTPS request each time" if mode == "http" else "one open websocket"))
+            for i in range(n if len(modes) == 1 else max(1, n // 2)):
+                t0 = time.time()
+                r = ex.order(COIN, True, sz, px, {"limit": {"tif": "Alo"}})
+                t1 = time.time()
+                try:
+                    stt = r["response"]["data"]["statuses"][0]
+                    oid = stt["resting"]["oid"]
+                except (KeyError, TypeError, IndexError):
+                    sys.exit("order was not accepted: %s" % str(r)[:300])
+                live.append(oid)
+                c0 = time.time()
+                ex.cancel(COIN, oid)
+                c1 = time.time()
+                live.remove(oid)
+                time.sleep(1.0)
+                o = info.query_order_by_oid(address, oid).get("order", {})
+                ts, cts = o.get("order", {}).get("timestamp"), o.get("statusTimestamp")   # block times
+                place_rt.append((t1 - t0) * 1000)
+                cancel_rt.append((c1 - c0) * 1000)
+                if ts:
+                    to_book.append(ts - t0 * 1000)
+                if cts and o.get("status") == "canceled":
+                    cancel_book.append(cts - c0 * 1000)
+                print("  round %2d: order in the book %s ms after sending, confirmed after %4.0f ms; cancel took effect after %s ms" % (
+                    i + 1, "%4.0f" % to_book[-1] if ts else "   ?", place_rt[-1], "%4.0f" % cancel_book[-1] if cancel_book else "   ?"))
+                time.sleep(1.0)
     finally:
+        ex = Exchange(wallet, url, account_address=address, perp_dexs=["", DEX])
         for oid in live:                      # never leave an order behind
             try:
                 ex.cancel(COIN, oid)
@@ -150,11 +178,13 @@ def main() -> None:
         if v:
             print("  %-46s median %4.0f ms   90%% under %4.0f ms   worst %4.0f ms   (n=%d)" % (name, st.median(v), pct(v, 0.9), max(v), len(v)))
     print("\nRESULT")
-    line("send -> order in Hyperliquid's book", to_book)
-    line("send -> confirmation back at this server", place_rt)
-    line("cancel -> confirmation", cancel_rt)
-    print("  The first line is the delay to compare with the shadow test's 100 / 250 / 500 ms columns.")
-    print("  It uses this server's clock against Hyperliquid's block time, so it is good to a few ms only if the clock is synced.")
+    for mode, (place_rt, to_book, cancel_rt, cancel_book) in res.items():
+        print(" via %s" % mode)
+        line("send -> order in Hyperliquid's book", to_book)
+        line("send -> cancel takes effect", cancel_book)
+        line("send -> confirmation back at this server", place_rt)
+    print("  'order in the book' is the delay to compare with the shadow test's 100 / 250 / 500 ms columns.")
+    print("  It compares this server's clock with Hyperliquid's block time, so it is only as good as the clock sync.")
 
 
 if __name__ == "__main__":
