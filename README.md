@@ -4,6 +4,19 @@ Records public market data for the Anthropic perpetuals and runs a shadow test o
 "OKX moves, take the follower". **The recorder, shadow engine and report place no orders, read no keys and touch no account.** The one exception is the separate order round-trip probe below, which you run by hand.
 Version line: `leadlag-0.2.2` (separate from the Omnibook version history). The owner calls this "the OKX bot".
 
+## Result so far (19 Nov 2026): the Hyperliquid trade is dropped
+
+- *Measured:* an order from the Tokyo server reaches Hyperliquid's book about 500 ms after it is
+  sent (median 501 ms over 10 orders by HTTPS, 548 ms over 7 by websocket; cancels the same).
+- *Measured:* on the fair view the trade "OKX moves, take Hyperliquid" pays only at 100 ms
+  (+2.74 bps after conversion, 505 signals) and loses at 500 ms in every version (-2.66 bps after
+  conversion, -5.18 before).
+- *Measured:* taking Binance, Bybit or Gate after an OKX move loses 11 to 17 bps a trade at their
+  5 bps fees.
+- So the trade needs a delay five times shorter than the one available. Do not rebuild it unless
+  a much faster route to Hyperliquid is confirmed by Hyperliquid.
+- Still open, same recording: Nasdaq leading OKX (needs a paid stock feed) and weekend drift.
+
 ## Start it on the server
 
 ```bash
