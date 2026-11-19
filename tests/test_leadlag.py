@@ -8,7 +8,7 @@ from leadlag.engine import COLUMNS, CsvSink, PairCfg, PairEngine, Params
 from leadlag.hours import hours_tag
 from leadlag.report import _grid, _rets, load_rows, xcorr_peak
 from leadlag.store import RawWriter, read_events
-from leadlag.venues import Bybit, Gate, Hyperliquid, Okx
+from leadlag.venues import Binance, Bybit, Gate, Hyperliquid, Okx
 
 L, F = "okx:L", "hl:F"
 T0 = 1795100000000.0   # 19 Nov 2026, US regular hours
@@ -197,6 +197,17 @@ class ParserTest(unittest.TestCase):
         v.on_message('{"time":1,"channel":"futures.trades","event":"update","result":[{"size":-300,"id":1,"create_time":1795103311,"create_time_ms":1795103311500,"price":"104.1","contract":"ANT_USDT"}]}', 1)
         self.assertEqual((h.out[0]["B"], h.out[0]["A"]), (25.0, 1.0))
         self.assertEqual((h.out[1]["q"], h.out[1]["sd"]), (3.0, "s"))
+
+    def test_binance_quotes_and_trades(self):
+        h = Capture()
+        v = Binance(h, config.DEFAULT["binance"], "ANTUSDT")
+        self.assertTrue(v.url.endswith("?streams=antusdt@bookTicker/antusdt@trade"))
+        v.on_message('{"stream":"antusdt@bookTicker","data":{"e":"bookTicker","u":1,"E":5,"T":4,"s":"ANTUSDT","b":"107.10","B":"3.5","a":"107.12","A":"1.2"}}', 1)
+        v.on_message('{"stream":"antusdt@trade","data":{"e":"trade","E":1795104957121,"T":1795104957121,"s":"ANTUSDT","t":2772107,"p":"107.10000","q":"0.15","X":"MARKET","m":true,"st":1}}', 1)
+        v.on_message('{"stream":"antusdt@trade","data":{"e":"trade","E":1,"T":1,"s":"ANTUSDT","t":1,"p":"107.1","q":"9","X":"INSURANCE_FUND","m":false}}', 1)
+        self.assertEqual((h.out[0]["b"], h.out[0]["A"], h.out[0]["e"]), (107.10, 1.2, 4))
+        self.assertEqual((h.out[1]["c"], h.out[1]["p"], h.out[1]["q"], h.out[1]["sd"]), ("trade", 107.1, 0.15, "s"))
+        self.assertEqual(h.out[2]["c"], "event")
 
     def test_bybit_level1_deltas(self):
         h = Capture()

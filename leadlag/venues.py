@@ -238,7 +238,8 @@ class Binance(WsVenue):
     def __init__(self, hub, cfg: dict, symbol: str):
         super().__init__(hub)
         s = symbol.lower()
-        self.url = "%s?streams=%s@bookTicker/%s@aggTrade" % (cfg["ws"], s, s)
+        # "@trade" is served on this address; "@aggTrade" only on the separate /market/ address
+        self.url = "%s?streams=%s@bookTicker/%s@trade" % (cfg["ws"], s, s)
 
     def on_message(self, msg: str, r: int) -> None:
         d = json.loads(msg).get("data") or {}
@@ -246,7 +247,9 @@ class Binance(WsVenue):
         if ev == "bookTicker":
             norm.append({"c": "bbo", "i": d["s"], "e": d.get("T") or d.get("E"),
                          "b": _f(d["b"]), "B": _f(d["B"]), "a": _f(d["a"]), "A": _f(d["A"])})
-        elif ev == "aggTrade":
+        elif ev == "trade" and d.get("X", "MARKET") != "MARKET":
+            norm.append({"c": "event", "ev": "trade_" + str(d.get("X"))})   # liquidation-fund and similar prints
+        elif ev in ("trade", "aggTrade"):
             norm.append({"c": "trade", "i": d["s"], "e": d["T"], "p": _f(d["p"]), "q": _f(d["q"]),
                          "sd": "s" if d["m"] else "b"})
         else:
