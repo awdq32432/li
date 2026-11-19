@@ -8,7 +8,8 @@ RUN_AS="${SUDO_USER:-$(id -un)}"
 
 sudo -u "$RUN_AS" python3 -m venv "$DIR/.venv" 2>/dev/null || { apt-get install -y python3-venv && sudo -u "$RUN_AS" python3 -m venv "$DIR/.venv"; }
 sudo -u "$RUN_AS" "$DIR/.venv/bin/pip" install -q -r "$DIR/requirements.txt"
-sudo -u "$RUN_AS" "$DIR/.venv/bin/python" -m unittest discover -s "$DIR/tests" -t "$DIR" 2>&1 | tail -3
+# a failing test is reported but must not stop the recorder from starting
+(cd "$DIR" && sudo -u "$RUN_AS" "$DIR/.venv/bin/python" -m unittest discover -s tests -t . 2>&1 | tail -3) || echo "WARNING: tests did not pass; starting the recorder anyway"
 
 unit() {  # name, description, module and arguments
 cat > "/etc/systemd/system/$1.service" <<UNIT
