@@ -37,4 +37,4 @@ sleep 60
 echo "--- recorder log, last lines ---"
 journalctl -u leadlag-recorder -n 15 --no-pager | cut -c1-260
 echo "--- first report (last 1 minute) ---"
-sudo -u "$RUN_AS" "$DIR/.venv/bin/python" -m leadlag.report --minutes 1 | sed -n '/^FEEDS/,/^STATE/p'
+cd "$DIR" && sudo -u "$RUN_AS" "$DIR/.venv/bin/python" -m leadlag.report --minutes 1 | sed -n '/^FEEDS/,/^STATE/p'
