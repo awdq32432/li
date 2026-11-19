@@ -1,7 +1,7 @@
 # The OKX bot (`leadlag`): OKX ANT recorder and shadow test
 
 Records public market data for the Anthropic perpetuals and runs a shadow test of
-"OKX moves, take the follower". **It places no orders, reads no keys and touches no account.**
+"OKX moves, take the follower". **The recorder, shadow engine and report place no orders, read no keys and touch no account.** The one exception is the separate order round-trip probe below, which you run by hand.
 Version line: `leadlag-0.2.2` (separate from the Omnibook version history). The owner calls this "the OKX bot".
 
 ## Start it on the server
@@ -115,6 +115,23 @@ t-statistic of 2 or more in the later part, are listed at the end. Dollar figure
 a per-day figure appears only once there is at least a day of data. With about 30 buckets tested, one or two will look good by luck: a bucket is a lead to
 test on new days, not a rule to trade. Two shadow columns feed it: `gap_bps` (leader over follower
 at the signal) and `entry_spread_bps`.
+
+## Order round-trip probe (the only part that uses a key)
+
+Measures how long an order takes to reach Hyperliquid's book from this server. It places one tiny
+post-only buy order 3% below the market, confirms it, cancels it, and repeats 20 times. Post-only
+orders cannot take, and 3% away should never fill; if one does, the probe says so at the end.
+
+```bash
+cd ~/li && .venv/bin/pip install -q -r requirements-live.txt && echo installed #
+read -rs -p "Paste the API wallet PRIVATE KEY, then Enter: " K; (umask 077; printf '%s' "$K" > ~/.hl_api_key); unset K; echo; echo saved #
+read -r -p "Paste your MAIN account address (0x...), then Enter: " A; (umask 077; printf '%s' "$A" > ~/.hl_account_address); unset A; echo saved #
+cd ~/li && .venv/bin/python -m leadlag.hl_probe #          shows the plan, sends nothing
+cd ~/li && .venv/bin/python -m leadlag.hl_probe --yes #    runs it
+```
+
+The key lives only in `~/.hl_api_key` (owner-only permissions; the probe refuses to run otherwise).
+It is never printed or logged. The recorder, shadow engine and report never read it.
 
 ## Settings
 

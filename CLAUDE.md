@@ -53,6 +53,8 @@ The report's own advice: build 1 to 8 in order; do not start with 9 or 10.
 
 - "The OKX bot" is the owner's name for the `leadlag` package in this repository (OKX leads, other
   venues follow). It is a recorder and shadow test: it places no orders.
+- `leadlag/hl_probe.py` is the one piece that signs orders (post-only, far from the market, run by
+  hand). It reads the API wallet key from `~/.hl_api_key` on the server. Never print that file.
 - Judge the OKX bot by the FAIR view (exchange timestamps), not the LIVE view: Hyperliquid's feed
   arrives about 300 ms old and the LIVE view flatters it.
 
