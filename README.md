@@ -2,7 +2,7 @@
 
 Records public market data for the Anthropic perpetuals and runs a shadow test of
 "OKX moves, take the follower". **It places no orders, reads no keys and touches no account.**
-Version line: `leadlag-0.2.1` (separate from the Omnibook version history). The owner calls this "the OKX bot".
+Version line: `leadlag-0.2.2` (separate from the Omnibook version history). The owner calls this "the OKX bot".
 
 ## Start it on the server
 
@@ -110,8 +110,9 @@ traded, median half-spread in % of price and the quoter's typical size.
 Splits every signal by the conditions when it fired: size of the leader's move, how far the
 follower had already moved, how far it sat behind the leader, its spread, the size shown, quote age,
 direction, market hours, conversion. Each bucket shows net bps for the earlier 60% of the data and
-for the later 40%. Only buckets positive in both, with at least 30 trades in each, are listed at
-the end. With about 30 buckets tested, one or two will look good by luck: a bucket is a lead to
+for the later 40%. Only buckets positive in both, with at least 30 trades in each and a
+t-statistic of 2 or more in the later part, are listed at the end. Dollar figures are for the sample;
+a per-day figure appears only once there is at least a day of data. With about 30 buckets tested, one or two will look good by luck: a bucket is a lead to
 test on new days, not a rule to trade. Two shadow columns feed it: `gap_bps` (leader over follower
 at the signal) and `entry_spread_bps`.
 

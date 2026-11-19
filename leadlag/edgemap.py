@@ -5,7 +5,7 @@
 
 Splits every signal by the conditions at the moment it fired and shows net bps for each bucket,
 separately for the earlier 60% of the data ("find") and the later 40% ("check"). A bucket only
-counts if it is positive in both halves. This reads a CSV; it changes nothing about the bot.
+counts if it is positive in both halves and clearly above zero (t of 2 or more) in the later one. This reads a CSV; it changes nothing about the bot.
 """
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def build(rows: list, pair: str, x: float, hold: float, lag: float, min_n: int =
     span = "%.1f days" % days if days >= 2 else "%.1f hours" % (days * 24)
     out += ["  %d trades over %s. All trades: find %+.2f bps (t %+.1f), check %+.2f bps (t %+.1f)" % (len(rows), span, m1, t1, m2, t2),
             "  find = earlier 60% of the data, check = later 40%. net bps is after fees.", ""]
-    keep, tested = [], 0
+    keep, tested, weak = [], 0, 0
     for name in feats[0]:
         out.append("  %s" % name)
         out.append("    %-22s | %6s %8s %6s | %6s %8s %6s |" % ("bucket", "find n", "net_bps", "t", "chk n", "net_bps", "t"))
@@ -94,14 +94,20 @@ def build(rows: list, pair: str, x: float, hold: float, lag: float, min_n: int =
             idx = [i for i, f in enumerate(feats) if f[name] == b]
             a, c = _stat([net[i] for i in idx if i < cut]), _stat([net[i] for i in idx if i >= cut])
             tested += 1
-            ok = a[0] >= min_n and c[0] >= min_n and a[1] > 0 and c[1] > 0
+            pos = a[0] >= min_n and c[0] >= min_n and a[1] > 0 and c[1] > 0
+            ok = pos and c[2] >= 2.0          # the check half must be clearly above zero, not just positive
+            weak += pos and not ok
             if ok:
-                usd = sum(float(rows[i]["net_usd"]) for i in idx) / days
-                keep.append("%s = %s: %+.2f then %+.2f bps, %d trades, about $%.0f a day at shadow size" % (name, b, a[1], c[1], len(idx), usd))
+                usd = sum(float(rows[i]["net_usd"]) for i in idx)
+                money = "$%.0f shadow profit in this sample" % usd
+                if days >= 1:                 # never stretch a few hours into a daily figure
+                    money += ", about $%.0f a day" % (usd / days)
+                keep.append("%s = %s: %+.2f then %+.2f bps, %d trades, %s" % (name, b, a[1], c[1], len(idx), money))
             out.append("    %-22s | %6d %+8.2f %+6.1f | %6d %+8.2f %+6.1f | %s" % (b, a[0], a[1], a[2], c[0], c[1], c[2], "HOLDS" if ok else ""))
         out.append("")
-    out.append("BUCKETS POSITIVE IN BOTH HALVES (at least %d trades in each):" % min_n)
+    out.append("BUCKETS THAT HOLD: positive in both halves, at least %d trades in each, check half t of 2 or more:" % min_n)
     out += ["  " + k for k in keep] or ["  none"]
+    out.append("  (%d more buckets were positive in both halves but not clearly above zero; ignore those)" % weak)
     out += ["", "  Caution: %d buckets were tested, so one or two can look good by luck alone. A bucket is a lead" % tested,
             "  to test on new days, not a rule to trade. Trades in the same burst are not independent."]
     return "\n".join(out)
