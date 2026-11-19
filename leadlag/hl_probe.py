@@ -155,12 +155,14 @@ def main() -> None:
                 ts, cts = o.get("order", {}).get("timestamp"), o.get("statusTimestamp")   # block times
                 place_rt.append((t1 - t0) * 1000)
                 cancel_rt.append((c1 - c0) * 1000)
+                got_c = bool(cts and o.get("status") == "canceled")
                 if ts:
                     to_book.append(ts - t0 * 1000)
-                if cts and o.get("status") == "canceled":
+                if got_c:
                     cancel_book.append(cts - c0 * 1000)
+                # "?" = Hyperliquid's order lookup had no answer for this round; it is left out of the result
                 print("  round %2d: order in the book %s ms after sending, confirmed after %4.0f ms; cancel took effect after %s ms" % (
-                    i + 1, "%4.0f" % to_book[-1] if ts else "   ?", place_rt[-1], "%4.0f" % cancel_book[-1] if cancel_book else "   ?"))
+                    i + 1, "%4.0f" % to_book[-1] if ts else "   ?", place_rt[-1], "%4.0f" % cancel_book[-1] if got_c else "   ?"))
                 time.sleep(1.0)
     finally:
         ex = Exchange(wallet, url, account_address=address, perp_dexs=["", DEX])
