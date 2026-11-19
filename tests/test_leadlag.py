@@ -6,7 +6,8 @@ import unittest
 from leadlag import config
 from leadlag.engine import COLUMNS, CsvSink, PairCfg, PairEngine, Params
 from leadlag.hours import hours_tag
-from leadlag.report import _grid, _rets, load_rows, xcorr_peak
+from leadlag import edgemap, fair
+from leadlag.report import _grid, _rets, aggregate, load_rows, shadow_section, xcorr_peak
 from leadlag.store import RawWriter, read_events
 from leadlag.venues import Binance, Bybit, Gate, Hyperliquid, Okx
 
@@ -244,6 +245,46 @@ class StoreAndStatsTest(unittest.TestCase):
         k, c = xcorr_peak(_rets(ga), _rets(gb))
         self.assertEqual(k * 50, 250)
         self.assertGreater(c, 0.9)
+
+
+class FairViewTest(unittest.TestCase):
+    def test_fair_view_uses_exchange_time_once_per_hour_and_edge_map_runs(self):
+        import random
+        random.seed(2)
+        with tempfile.TemporaryDirectory() as d:
+            cfg = config.load()
+            cfg.update(data_dir=os.path.join(d, "raw"), fair_csv=os.path.join(d, "fair.csv"), shadow_csv=os.path.join(d, "live.csv"))
+            h0 = (T0 // 3600000) * 3600000
+            w, px = RawWriter(cfg["data_dir"]), 100.0
+            ev = [(h0 + 500, "okx", "instruments", None)]
+            for i in range(120):                       # a jump every 20 s; the follower's book moves 400 ms later
+                t = h0 + 1000 + i * 20000
+                new = px * (1 + random.choice((-1, 1)) * 0.001)
+                ev += [(t, "okx", "bbo", px), (t + 100, "okx", "bbo", new), (t, "hl", "bbo", px), (t + 500, "hl", "bbo", new)]
+                px = new
+            for t, s, c, m in sorted(ev, key=lambda e: e[0] + (300 if e[1] == "hl" else 0)):
+                r = int((t + (300 if s == "hl" else 0)) * 1e6)      # the follower's messages ARRIVE 300 ms late
+                if c == "instruments":
+                    w.write(s, r, [{"c": c, "i": "ANTHROPIC-USDT-SWAP", "f": {"ruleType": "normal"}}], None)
+                else:
+                    inst = "ANTHROPIC-USDT-SWAP" if s == "okx" else "xyz:ANT"
+                    w.write(s, r, [{"c": "bbo", "i": inst, "e": t, "b": m - 0.005, "B": 50.0, "a": m + 0.005, "A": 50.0}], None)
+            w.close()
+            self.assertEqual(fair.update_fair(cfg, h0 + 3600000 + 10000), 1)
+            self.assertEqual(fair.update_fair(cfg, h0 + 3600000 + 20000), 0)      # not replayed twice
+            A = aggregate(cfg["fair_csv"])
+            st = A["okx>hl"]["stats"]
+            self.assertEqual(st[(8.0, 2.0, 250.0, "all")].n, 120)
+            self.assertGreater(st[(8.0, 2.0, 250.0, "all")].s / 120, 5)   # book still stale 250 ms after the move
+            self.assertLess(st[(8.0, 2.0, 500.0, "all")].s / 120, 0)      # repriced by 500 ms: only costs are left
+            self.assertIn((8.0, 2.0, 250.0, ("conv_tag", "post_conversion")), st)
+            txt = "\n".join(shadow_section(A, {}, h0, h0 + 3600000))
+            self.assertIn("FAIR all", txt)
+            rows = load_rows(cfg["fair_csv"])
+            self.assertIn("gap_bps", rows[0])
+            em = edgemap.build(rows, "okx>hl", 8.0, 2.0, 250.0)
+            self.assertIn("HOLDS", em)
+            self.assertIn("size of the leader's move", em)
 
 
 if __name__ == "__main__":

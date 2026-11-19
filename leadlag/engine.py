@@ -21,8 +21,8 @@ from .hours import hours_tag
 COLUMNS = [
     "version", "pair", "leader", "follower", "clock",
     "signal_ts_ms", "signal_utc", "dir", "x_bps", "w_ms", "lag_ms", "hold_s",
-    "leader_move_bps", "leader_mid", "follower_mid_at_signal", "follower_premove_bps",
-    "entry_ts_ms", "entry_px", "entry_disp_sz", "entry_quote_age_ms", "size_usd",
+    "leader_move_bps", "leader_mid", "follower_mid_at_signal", "follower_premove_bps", "gap_bps",
+    "entry_ts_ms", "entry_px", "entry_disp_sz", "entry_quote_age_ms", "entry_spread_bps", "size_usd",
     "exit_px", "exit_disp_sz", "exit_quote_age_ms",
     "fee_bps_side", "gross_bps", "net_bps", "net_usd",
     "hours_tag", "conv_tag", "status",
@@ -170,6 +170,7 @@ class PairEngine:
             "leader_move_bps": round(move, 3), "leader_mid": round(lmid, 6),
             "follower_mid_at_signal": round(fmid, 6) if fmid else "",
             "follower_premove_bps": round(pre, 3) if pre is not None else "",
+            "gap_bps": round((lmid / fmid - 1.0) * 1e4, 3) if fmid else "",   # leader over follower
             "fee_bps_side": self.cfg.fee_bps,
             "hours_tag": hours_tag(t), "conv_tag": self.conv_tag(t),
         }
@@ -189,6 +190,7 @@ class PairEngine:
             return
         row.update(entry_ts_ms=int(ev.due), entry_px=px, entry_disp_sz=sz,
                    entry_quote_age_ms=int(ev.due - q.t),
+                   entry_spread_bps=round((q.ask / q.bid - 1.0) * 1e4, 3) if q.bid and q.ask else "",
                    size_usd=round(min(sz * px, self.p.max_usd), 2))
         self._seq += 1
         heapq.heappush(self.pending, _Pending(ev.due + row["hold_s"] * 1000.0, self._seq, "exit", row))

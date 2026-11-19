@@ -36,20 +36,25 @@ def build_pairs(cfg: dict, root: str, t0: float, t1: float) -> list:
     return pairs
 
 
-def run(cfg: dict, root: str, out: str, clock: str = "recv", t0: float = 0.0, t1: float = 0.0, pairs=None) -> list:
+def run(cfg: dict, root: str, out: str, clock: str = "recv", t0: float = 0.0, t1: float = 0.0, pairs=None,
+        append: bool = False, rule0=None, sig_lt: float | None = None) -> tuple:
+    """Replays [t0, t1]. Returns (engines, last ruleType seen).
+    append: add to `out` (otherwise it is replaced). rule0: ruleType known before t0.
+    sig_lt: keep only rows whose signal is before this time (used to cut whole hours cleanly)."""
     span = data_span(root)
     t0, t1 = t0 or span[0], t1 or span[1]
     pairs = pairs or build_pairs(cfg, root, t0, t1)
-    state = {"rule": None}
+    state = {"rule": rule0}
 
     def conv_tag(_t):
         if state["rule"] is None:
             return "unknown"
         return "pre_conversion" if state["rule"] == "pre_market" else "post_conversion"
 
-    if os.path.exists(out):
+    if os.path.exists(out) and not append:
         os.remove(out)
-    sink = CsvSink(out)
+    csv_sink = CsvSink(out)
+    sink = csv_sink if sig_lt is None else (lambda row: csv_sink(row) if row["signal_ts_ms"] < sig_lt else None)
     params = config.engine_params(cfg)
     engines = [PairEngine(p, params, sink, conv_tag, clock) for p in pairs]
     by_feed: dict = {}
@@ -89,8 +94,10 @@ def run(cfg: dict, root: str, out: str, clock: str = "recv", t0: float = 0.0, t1
             else:
                 state["rule"] = n["f"].get("ruleType")
         h += 1
-    sink.close()
-    return engines
+    for e in engines:          # everything up to t1 has been seen: settle what is due by then
+        e.advance(t1)
+    csv_sink.close()
+    return engines, state["rule"]
 
 
 def _ts(s: str) -> float:
@@ -110,11 +117,11 @@ def main() -> None:
     cfg = config.load(a.config)
     if a.lags_ms:
         cfg["engine"]["lags_ms"] = [float(x) for x in a.lags_ms.split(",")]
-    engines = run(cfg, a.data_dir or cfg["data_dir"], a.out, a.clock, _ts(a.start), _ts(a.end))
+    engines, _ = run(cfg, a.data_dir or cfg["data_dir"], a.out, a.clock, _ts(a.start), _ts(a.end))
     for e in engines:
         print("%-10s signals %5d  rows %6d  unfinished at end %d" % (e.cfg.name, e.n_signals, e.n_rows, len(e.pending)))
-    from .report import load_rows, shadow_section
-    print("\n".join(shadow_section(load_rows(a.out), None, None)))
+    from .report import aggregate, shadow_section
+    print("\n".join(shadow_section(aggregate(a.out), {}, None, None, full=True)))
 
 
 if __name__ == "__main__":

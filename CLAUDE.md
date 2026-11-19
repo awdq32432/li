@@ -51,5 +51,10 @@ The report's own advice: build 1 to 8 in order; do not start with 9 or 10.
 
 ## Practical notes
 
+- "The OKX bot" is the owner's name for the `leadlag` package in this repository (OKX leads, other
+  venues follow). It is a recorder and shadow test: it places no orders.
+- Judge the OKX bot by the FAIR view (exchange timestamps), not the LIVE view: Hyperliquid's feed
+  arrives about 300 ms old and the LIVE view flatters it.
+
 - The owner's terminal pastes every command twice. End every command given to them with ` #`.
 - The server is `mexc-recorder` in AWS Tokyo; this code is deployed at `~/li` with `deploy/install.sh`.

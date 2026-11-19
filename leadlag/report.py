@@ -1,4 +1,4 @@
-"""leadlag_health: the hourly report.
+"""OKX bot health: the hourly report.
 
     python -m leadlag.report                 # last 60 minutes, printed
     python -m leadlag.report --loop          # print and append to data/reports/leadlag_health.log every hour
@@ -25,62 +25,112 @@ def _utc(ms: float) -> str:
 
 
 # ---------------------------------------------------------------- shadow results
-def load_rows(path: str) -> list:
+NUM = ("signal_ts_ms", "x_bps", "lag_ms", "hold_s", "net_bps", "net_usd", "size_usd")
+
+
+def load_rows(path: str, keep=None) -> list:
+    """Rows of a shadow CSV as dicts. `keep` filters on the raw text row, to save memory."""
     if not os.path.exists(path):
         return []
     out = []
     with open(path, newline="") as f:
         for r in csv.DictReader(f):
-            for k in ("signal_ts_ms", "x_bps", "lag_ms", "hold_s", "net_bps", "net_usd", "size_usd"):
+            if keep is not None and not keep(r):
+                continue
+            for k in NUM:
                 r[k] = float(r[k]) if r.get(k) not in ("", None) else None
             out.append(r)
     return out
 
 
-def _stat(vals: list) -> str:
-    n = len(vals)
-    if n == 0:
-        return "%5d %8s %6s %5s" % (0, "-", "-", "-")
-    m = sum(vals) / n
-    sd = st.stdev(vals) if n > 1 else 0.0
-    t = "%+6.1f" % (m / (sd / math.sqrt(n))) if sd > 0 and n >= 5 else "%6s" % "-"   # too few trades for a t-statistic
-    return "%5d %+8.2f %s %4.0f%%" % (n, m, t, 100.0 * sum(v > 0 for v in vals) / n)
+class Acc:
+    """Running count, mean, t-statistic and share of winners, without keeping the rows."""
+    __slots__ = ("n", "s", "ss", "w")
+
+    def __init__(self):
+        self.n, self.s, self.ss, self.w = 0, 0.0, 0.0, 0
+
+    def add(self, v: float) -> None:
+        self.n += 1
+        self.s += v
+        self.ss += v * v
+        self.w += v > 0
+
+    def __str__(self) -> str:
+        n = self.n
+        if n == 0:
+            return "%5d %8s %6s %5s" % (0, "-", "-", "-")
+        m = self.s / n
+        var = (self.ss - n * m * m) / (n - 1) if n > 1 else 0.0
+        t = "%+6.1f" % (m / math.sqrt(var / n)) if var > 1e-12 and n >= 5 else "%6s" % "-"   # too few for a t-statistic
+        return "%5d %+8.2f %s %4.0f%%" % (n, m, t, 100.0 * self.w / n)
 
 
-def shadow_section(rows: list, t0, t1) -> list:
-    """Per pair: signals per hour, then net bps (after fees), t-statistic and winners per delay."""
-    out = []
-    if not rows:
+def aggregate(path: str, t0=None, t1=None) -> dict:
+    """Reads a shadow CSV once and keeps only totals. Scopes: all, win(dow), hours tag, conversion tag."""
+    A: dict = {}
+    if not os.path.exists(path):
+        return A
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            P = A.get(r["pair"])
+            if P is None:
+                P = A[r["pair"]] = {"follower": r["follower"], "fee": r["fee_bps_side"], "stats": {}, "sig": {}, "combos": set()}
+            ts, x = float(r["signal_ts_ms"]), float(r["x_bps"])
+            combo = (x, float(r["hold_s"]), float(r["lag_ms"]))
+            P["combos"].add(combo)
+            inwin = t0 is not None and t0 <= ts <= t1
+            if inwin:
+                P["sig"].setdefault(x, set()).add(ts)
+            if r["status"] != "ok":
+                continue
+            v = float(r["net_bps"])
+            for scope in ("all", "win" if inwin else None, ("hours_tag", r["hours_tag"]), ("conv_tag", r["conv_tag"])):
+                if scope is not None:
+                    key = combo + (scope,)
+                    acc = P["stats"].get(key)
+                    if acc is None:
+                        acc = P["stats"][key] = Acc()
+                    acc.add(v)
+    return A
+
+
+def shadow_section(fair: dict, live: dict, t0, t1, full: bool = False) -> list:
+    """Per pair: signals per hour, then net bps (after fees), t-statistic and winners per combination.
+    FAIR = replayed on exchange timestamps (the honest view). LIVE = the server's receive times."""
+    if not fair and not live:
         return ["  no shadow rows yet"]
-    win = [r for r in rows if t0 is None or t0 <= r["signal_ts_ms"] <= t1]
+    out = []
     hdr = "%5s %8s %6s %5s" % ("n", "net_bps", "t", "win")
-    for pair in sorted({r["pair"] for r in rows}):
-        pr = [r for r in rows if r["pair"] == pair]
-        pw = [r for r in win if r["pair"] == pair]
-        fee = pr[0]["fee_bps_side"]
-        out.append("")
-        out.append("PAIR %s   follower %s   fee %s bps a side" % (pair, pr[0]["follower"], fee))
+    none = Acc()
+    for pair in sorted(set(fair) | set(live), key=lambda p: (p != "okx>hl", p)):
+        pf, pl = fair.get(pair), live.get(pair)
+        base = pf or pl
+        out += ["", "PAIR %s   follower %s   fee %s bps a side" % (pair, base["follower"], base["fee"])]
         if t0 is not None:
             hrs = max((t1 - t0) / 3600000.0, 1e-9)
-            sig = {x: len({r["signal_ts_ms"] for r in pw if r["x_bps"] == x}) for x in sorted({r["x_bps"] for r in pr})}
-            out.append("  signals per hour (window): " + "   ".join("X>=%g: %.0f" % (x, n / hrs) for x, n in sig.items()))
-        bad = sum(r["status"] != "ok" for r in pr)
-        usd = sum(r["net_usd"] or 0.0 for r in pr if r["status"] == "ok" and r["x_bps"] == 8 and r["hold_s"] == 2 and r["lag_ms"] == 250)
-        out.append("  rows without a usable follower quote (all time): %d of %d.  Shadow $ at X=8, 250 ms, 2 s (all time): %+.2f" % (bad, len(pr), usd))
-        out.append("  %4s %5s %6s | %s | %s" % ("X", "hold", "delay", "window: " + hdr, "all time: " + hdr))
-        combos = sorted({(r["x_bps"], r["hold_s"], r["lag_ms"]) for r in pr})
-        for x, h, lag in combos:
-            sel = lambda rs: [r["net_bps"] for r in rs if r["status"] == "ok" and (r["x_bps"], r["hold_s"], r["lag_ms"]) == (x, h, lag)]
-            out.append("  %4g %4gs %4gms | %s | %s" % (x, h, lag, "        " + _stat(sel(pw)), "          " + _stat(sel(pr))))
-        for col, label in (("hours_tag", "market hours"), ("conv_tag", "conversion")):
-            tags = sorted({r[col] for r in pr})
-            out.append("  split by %s (X=8, hold 2 s, all time):" % label)
-            for tag in tags:
-                parts = []
-                for lag in sorted({c[2] for c in combos}):
-                    v = [r["net_bps"] for r in pr if r["status"] == "ok" and r[col] == tag and r["x_bps"] == 8 and r["hold_s"] == 2 and r["lag_ms"] == lag]
-                    parts.append("%gms %s" % (lag, _stat(v)))
-                out.append("    %-16s %s" % (tag, " | ".join(parts)))
+            out.append("  signals per hour (window): " + ("   ".join(
+                "X>=%g: %.0f" % (x, len(v) / hrs) for x, v in sorted(base["sig"].items())) or "none"))
+        combos = sorted(base["combos"])
+        if not (full or pair == "okx>hl"):      # the 5 bps venues: headline rows only
+            combos = [c for c in combos if c[0] == 8 and c[1] == 2]
+        cols = []
+        if pf and t0 is not None:
+            cols.append(("FAIR window", pf, "win"))
+        if pf:
+            cols.append(("FAIR all", pf, "all"))
+        if pl:
+            cols.append(("LIVE all", pl, "all"))
+        out.append("  %4s %5s %6s | " % ("X", "hold", "delay") + " | ".join("%-12s%s" % (name, hdr) for name, _, _ in cols))
+        for c in combos:
+            out.append("  %4g %4gs %4gms | " % c + " | ".join("%-12s%s" % ("", P["stats"].get(c + (sc,), none)) for _, P, sc in cols))
+        if pf and (full or pair == "okx>hl"):
+            lags = sorted({c[2] for c in combos})
+            for col, label in (("hours_tag", "market hours"), ("conv_tag", "conversion")):
+                out.append("  FAIR split by %s (X=8, hold 2 s, all time):" % label)
+                for tag in sorted({k[3][1] for k in pf["stats"] if isinstance(k[3], tuple) and k[3][0] == col}):
+                    out.append("    %-16s %s" % (tag, " | ".join(
+                        "%gms %s" % (lag, pf["stats"].get((8.0, 2.0, lag, (col, tag)), none)) for lag in lags)))
     return out
 
 
@@ -201,13 +251,20 @@ def raw_sections(S: dict, t0: float, t1: float, okx_feed: str, hl_feed: str) -> 
     return out
 
 
-def build(cfg: dict, minutes: float, clock: str, now_ms: float | None = None) -> str:
+def build(cfg: dict, minutes: float, clock: str, now_ms: float | None = None, full: bool = False) -> str:
     t1 = now_ms or time.time() * 1000
     t0 = t1 - minutes * 60000
-    out = ["=" * 100, "leadlag_health  %s   %s   window: last %g min   clock: %s" % (VERSION, _utc(t1), minutes, clock),
+    out = ["=" * 100, "OKX bot health  %s   %s   window: last %g min   clock: %s" % (VERSION, _utc(t1), minutes, clock),
            "Shadow results only. No orders were placed."]
-    out += ["", "SHADOW TEST  (net_bps is after fees; window = the last %g min; t = t-statistic)" % minutes]
-    out += shadow_section(load_rows(cfg["shadow_csv"]), t0, t1)
+    out += ["", "SHADOW TEST  (net_bps is after fees; t = t-statistic; window = the last %g min)" % minutes,
+            "  FAIR = both venues lined up on their own timestamps, finished hours only. Judge the trade by this.",
+            "  LIVE = this server's receive times. Hyperliquid's quotes arrive ~300 ms old, so LIVE flatters it."]
+    try:
+        from .fair import update_fair
+        update_fair(cfg, t1)
+    except Exception as e:
+        out.append("  fair view could not be updated: %s: %s" % (type(e).__name__, e))
+    out += shadow_section(aggregate(cfg["fair_csv"], t0, t1), aggregate(cfg["shadow_csv"], t0, t1), t0, t1, full)
     S = scan(cfg["data_dir"], t0, t1, clock)
     out += raw_sections(S, t0, t1, "okx:" + cfg["okx"]["ant_swap"], "hl:" + cfg["hl"]["ant"])
     log = cfg["conversion_log"]
@@ -222,18 +279,19 @@ def main() -> None:
     ap.add_argument("--config")
     ap.add_argument("--minutes", type=float, default=60)
     ap.add_argument("--clock", choices=("recv", "exch"), default="recv")
+    ap.add_argument("--full", action="store_true", help="every combination for every pair")
     ap.add_argument("--loop", action="store_true", help="run at the top of every hour and append to the log")
     ap.add_argument("--log", default="data/reports/leadlag_health.log")
     a = ap.parse_args()
     cfg = config.load(a.config)
     if not a.loop:
-        print(build(cfg, a.minutes, a.clock))
+        print(build(cfg, a.minutes, a.clock, full=a.full))
         return
     os.makedirs(os.path.dirname(a.log) or ".", exist_ok=True)
     while True:
         time.sleep(3600 - time.time() % 3600 + 5)
         try:
-            txt = build(cfg, a.minutes, a.clock)
+            txt = build(cfg, a.minutes, a.clock, full=a.full)
         except Exception as e:
             txt = "leadlag_health failed: %s: %s" % (type(e).__name__, e)
         print(txt, flush=True)

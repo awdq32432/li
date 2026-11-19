@@ -78,9 +78,10 @@ def hour_files(root: str, stream: str, t0_ms: float, t1_ms: float) -> list:
     while h * 3600000 <= t1_ms:
         hk = _hour_key(h * 3600000 * 1000000)
         base = os.path.join(root, stream, hk[:8], "%s_%s.jsonl" % (stream, hk))
-        for p in (base + ".gz", base):
-            if os.path.exists(p):
-                out.append(p)
+        if os.path.exists(base + ".gz"):       # the .gz appears only once it is complete
+            out.append(base + ".gz")
+        elif os.path.exists(base):
+            out.append(base)
         h += 1
     return out
 

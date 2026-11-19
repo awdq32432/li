@@ -1,8 +1,8 @@
-# leadlag: OKX ANT recorder and shadow test
+# The OKX bot (`leadlag`): OKX ANT recorder and shadow test
 
 Records public market data for the Anthropic perpetuals and runs a shadow test of
 "OKX moves, take the follower". **It places no orders, reads no keys and touches no account.**
-Version line: `leadlag-0.1.0` (separate from the Omnibook version history).
+Version line: `leadlag-0.2.0` (separate from the Omnibook version history). The owner calls this "the OKX bot".
 
 ## Start it on the server
 
@@ -78,9 +78,41 @@ One line per message:
 | `conv_tag` | `pre_conversion`, `post_conversion`, `unknown` |
 | `status` | `ok`, or `no_entry_quote` / `no_exit_quote` when the follower had no usable quote |
 
+## Fair view and live view
+
+The shadow test is reported two ways, side by side:
+
+- **FAIR** replays each finished hour with both venues lined up on their own timestamps
+  (`data/shadow/shadow_fair.csv`). **Judge the trade by this.**
+- **LIVE** uses the server's receive times (`data/shadow/shadow_leadlag.csv`). Hyperliquid's quotes
+  arrive about 300 ms old, so LIVE "fills" at prices a real order would no longer get.
+
+FAIR is updated whenever the report runs. It treats Hyperliquid's timestamp as the moment a quote
+became takeable; that is believed to be the block time but has not been verified with Hyperliquid.
+
 ## The hourly report
 
-Per pair: signals per hour; average net bps, t-statistic and share of winners for every combination, for the last hour and for all time; the same split by market hours and by pre/post conversion. Then feed health and ping round trips, the lag at which cross-correlation peaks for each pair of venues, the OKX to Hyperliquid price gap, and for HYPE options trades per hour, HYPE traded, median half-spread in % of price and the quoter's typical size.
+Per pair: signals per hour; average net bps, t-statistic and share of winners, FAIR for the last
+hour, FAIR for all time and LIVE for all time. `okx>hl` shows every combination and the split by
+market hours and by pre/post conversion; the 5 bps venues show the headline rows (`--full` shows
+everything). Then feed health and ping round trips, the lag at which cross-correlation peaks for
+each pair of venues, the OKX to Hyperliquid price gap, and for HYPE options trades per hour, HYPE
+traded, median half-spread in % of price and the quoter's typical size.
+
+## The edge map
+
+```bash
+.venv/bin/python -m leadlag.edgemap                 # okx>hl, 250 ms delay, 2 s hold, fair view
+.venv/bin/python -m leadlag.edgemap --lag 100
+```
+
+Splits every signal by the conditions when it fired: size of the leader's move, how far the
+follower had already moved, how far it sat behind the leader, its spread, the size shown, quote age,
+direction, market hours, conversion. Each bucket shows net bps for the earlier 60% of the data and
+for the later 40%. Only buckets positive in both, with at least 30 trades in each, are listed at
+the end. With about 30 buckets tested, one or two will look good by luck: a bucket is a lead to
+test on new days, not a rule to trade. Two shadow columns feed it: `gap_bps` (leader over follower
+at the signal) and `entry_spread_bps`.
 
 ## Settings
 

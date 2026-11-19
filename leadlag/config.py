@@ -4,7 +4,8 @@ import json
 
 DEFAULT = {
     "data_dir": "data/raw/okx_ant",
-    "shadow_csv": "data/shadow/shadow_leadlag.csv",
+    "shadow_csv": "data/shadow/shadow_leadlag.csv",      # live view: the server's receive times
+    "fair_csv": "data/shadow/shadow_fair.csv",           # fair view: exchange timestamps, hour by hour
     "conversion_log": "data/shadow/conversion_log.jsonl",
     "okx": {
         "ws": ["wss://ws.okx.com:8443/ws/v5/public", "wss://ws.okx.com/ws/v5/public"],

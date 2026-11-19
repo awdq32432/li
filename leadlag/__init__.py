@@ -4,4 +4,4 @@ Separate strategy from Omnibook: it has its own version line.
 Public market data only. This package never places orders and never reads keys.
 """
 
-VERSION = "leadlag-0.1.0"
+VERSION = "leadlag-0.2.0"   # the owner calls this strategy "the OKX bot"
