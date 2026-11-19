@@ -85,19 +85,31 @@ def hour_files(root: str, stream: str, t0_ms: float, t1_ms: float) -> list:
     return out
 
 
-def read_file(path: str, with_raw: bool = False) -> Iterator[tuple]:
-    """Yields (recv_ms, normalised event[, raw]) for every event in a file."""
+def read_file(path: str, with_raw: bool = False, only: tuple | None = None) -> Iterator[tuple]:
+    """Yields (recv_ms, normalised event[, raw]) for every event in a file.
+    `only` limits it to some event types, e.g. ("bbo", "conn"), and skips the other lines unparsed."""
     op = gzip.open if path.endswith(".gz") else open
+    marks = tuple('"c":"%s"' % c for c in only) if only else None
     try:
         with op(path, "rt") as f:
             for line in f:
                 try:
-                    j = json.loads(line)
+                    cut = line.index(',"d":')            # the normalised part ends here
+                    head = line[:cut]
+                    if marks and not any(m in head for m in marks):
+                        continue
+                    if with_raw:
+                        j = json.loads(line)
+                        r, norm, raw = j["r"] / 1e6, j["n"], j["d"]
+                    else:                                # do not parse the exchange's message at all
+                        j = json.loads(head + "}")
+                        r, norm, raw = j["r"] / 1e6, j["n"], None
                 except ValueError:
                     continue   # a torn last line after a crash
-                r = j["r"] / 1e6
-                for n in j["n"]:
-                    yield (r, n, j["d"]) if with_raw else (r, n)
+                for n in norm:
+                    if only and n["c"] not in only:
+                        continue
+                    yield (r, n, raw) if with_raw else (r, n)
     except (EOFError, OSError):
         return
 

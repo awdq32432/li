@@ -19,9 +19,8 @@ from .store import data_span, hour_files, list_streams, read_file
 
 def _first_inst(root: str, stream: str, t0: float, t1: float):
     for p in hour_files(root, stream, t0, t1):
-        for _, n in read_file(p):
-            if n["c"] == "bbo":
-                return n["i"]
+        for _, n in read_file(p, only=("bbo",)):
+            return n["i"]
     return None
 
 
@@ -64,7 +63,7 @@ def run(cfg: dict, root: str, out: str, clock: str = "recv", t0: float = 0.0, t1
         evs = []
         for s in streams:
             for p in hour_files(root, s, h0, h0):
-                for i, (r, n) in enumerate(read_file(p)):
+                for r, n in read_file(p, only=("bbo", "conn", "instruments")):
                     c = n["c"]
                     if c == "bbo":
                         feed = s + ":" + n["i"]
