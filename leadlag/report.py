@@ -10,12 +10,13 @@ import csv
 import json
 import math
 import os
+import shutil
 import statistics as st
 import time
 from datetime import datetime, timezone
 
 from . import VERSION, config
-from .store import list_streams, read_events
+from .store import list_streams, scan_heads
 
 GRID_MS = 50
 
@@ -108,9 +109,14 @@ def shadow_section(fair: dict, live: dict, t0, t1, full: bool = False) -> list:
         base = pf or pl
         out += ["", "PAIR %s   follower %s   fee %s bps a side" % (pair, base["follower"], base["fee"])]
         if t0 is not None:
-            hrs = max((t1 - t0) / 3600000.0, 1e-9)
-            out.append("  signals per hour (window): " + ("   ".join(
-                "X>=%g: %.0f" % (x, len(v) / hrs) for x, v in sorted(base["sig"].items())) or "none"))
+            # FAIR covers finished hours only, so its part of the window ends at the last full hour
+            end = min(t1, (t1 // 3600000) * 3600000) if pf else t1
+            mins = (end - t0) / 60000.0
+            if mins <= 0:
+                out.append("  no finished hour inside this window yet: FAIR window is empty")
+            else:
+                out.append("  signals per hour (%s, %.0f min of the window): " % ("FAIR" if pf else "LIVE", mins) + ("   ".join(
+                    "X>=%g: %.0f" % (x, len(v) / (mins / 60.0)) for x, v in sorted(base["sig"].items())) or "none"))
         combos = sorted(base["combos"])
         if not (full or pair == "okx>hl"):      # the 5 bps venues: headline rows only
             combos = [c for c in combos if c[0] == 8 and c[1] == 2]
@@ -136,43 +142,69 @@ def shadow_section(fair: dict, live: dict, t0, t1, full: bool = False) -> list:
 
 # ---------------------------------------------------------------- raw data sections
 def scan(root: str, t0: float, t1: float, clock: str) -> dict:
-    """One pass over the window's raw files."""
+    """One pass over the window's raw files. High-volume lines the report only counts are not parsed."""
     S: dict = {"streams": {}, "mids": {}, "opt": {"trades": 0, "qty": 0.0, "hs": [], "sz": [], "insts": set()},
                "rule": None, "growth": None}
     for s in list_streams(root):
         d = S["streams"].setdefault(s, {"msgs": 0, "bbo": 0, "trade": 0, "last": 0.0, "down": 0, "rtt_ws": [], "rtt_app": [], "lat": []})
-        for r, n in read_events(root, s, t0, t1):
-            c = n["c"]
-            d["msgs"] += 1
+        opt = s == "okx_opt"
+        for r, head in scan_heads(root, s, t0, t1):
             d["last"] = r
-            if c == "bbo":
-                d["bbo"] += 1
-                if n.get("e"):
-                    d["lat"].append(r - n["e"])
-                b, a = n["b"], n["a"]
-                if s == "okx_opt":
-                    o = S["opt"]
-                    o["insts"].add(n["i"])
-                    if b and a:
-                        o["hs"].append((a - b) / (a + b) * 100.0)   # half-spread as % of mid
-                        o["sz"] += [n["B"], n["A"]]
-                elif b and a and "ANT" in n["i"].upper():
-                    t = n["e"] if clock == "exch" and n.get("e") else r
-                    S["mids"].setdefault(s + ":" + n["i"], []).append((t, (a + b) / 2.0))
-            elif c == "trade":
-                d["trade"] += 1
-                if s == "okx_opt":
+            if not opt and '"c":"trade"' in head:        # trades: counted, not parsed
+                k = head.count('"c":"trade"')
+                d["msgs"] += k
+                d["trade"] += k
+                continue
+            if '"c":"optsum"' in head or '"c":"book"' in head:
+                d["msgs"] += 1
+                continue
+            try:
+                norm = json.loads(head + "}")["n"]
+            except ValueError:
+                continue
+            for n in norm:
+                c = n["c"]
+                d["msgs"] += 1
+                if c == "bbo":
+                    d["bbo"] += 1
+                    if n.get("e") and d["bbo"] % 20 == 1:          # a 1-in-20 sample is plenty for a median
+                        d["lat"].append(r - n["e"])
+                    b, a = n["b"], n["a"]
+                    if opt:
+                        o = S["opt"]
+                        o["insts"].add(n["i"])
+                        if b and a:
+                            o["hs"].append((a - b) / (a + b) * 100.0)   # half-spread as % of mid
+                            o["sz"] += [n["B"], n["A"]]
+                    elif b and a and "ANT" in n["i"].upper():
+                        t = n["e"] if clock == "exch" and n.get("e") else r
+                        cell = int((t - t0) // GRID_MS)
+                        if cell >= 0:                                  # last mid in each 50 ms cell
+                            S["mids"].setdefault(s + ":" + n["i"], {})[cell] = (a + b) / 2.0
+                elif c == "trade":
+                    d["trade"] += 1
                     S["opt"]["trades"] += 1
                     S["opt"]["qty"] += n["q"]
-            elif c == "conn" and n["st"] == "down":
-                d["down"] += 1
-            elif c == "rtt":
-                d["rtt_" + n["k"]].append(n["ms"])
-            elif c == "instruments":
-                S["rule"] = n["f"].get("ruleType")
-            elif c == "meta":
-                S["growth"] = n["f"].get("growthMode") or "off"
+                elif c == "conn" and n["st"] == "down":
+                    d["down"] += 1
+                elif c == "rtt":
+                    d["rtt_" + n["k"]].append(n["ms"])
+                elif c == "instruments":
+                    S["rule"] = n["f"].get("ruleType")
+                elif c == "meta":
+                    S["growth"] = n["f"].get("growthMode") or "off"
     return S
+
+
+def _grid_cells(cells: dict, n: int) -> list:
+    """Last mid at each grid point from {cell: mid} (None before the first quote)."""
+    out, last = [None] * n, None
+    for i in range(n):
+        v = cells.get(i)
+        if v is not None:
+            last = v
+        out[i] = last
+    return out
 
 
 def _grid(series: list, t0: float, n: int) -> list:
@@ -205,6 +237,25 @@ def xcorr_peak(ra: dict, rb: dict, max_lag: int = 20):
     return best
 
 
+def disk_line(root: str, now_ms: float) -> str:
+    """Recording size, free space, and days left at the last finished hour's rate."""
+    total = last = 0
+    key = datetime.fromtimestamp(now_ms / 1000 - 3600, timezone.utc).strftime("%Y%m%d_%H")
+    for dp, _, fs in os.walk(root):
+        for f in fs:
+            try:
+                sz = os.path.getsize(os.path.join(dp, f))
+            except OSError:
+                continue
+            total += sz
+            if key in f:
+                last += sz
+    free = shutil.disk_usage(root if os.path.isdir(root) else ".").free
+    rate = last * 24 / 1e9
+    left = "%.0f days left at that rate" % (free / 1e9 / rate) if rate > 0.01 else "rate not known yet"
+    return "DISK  recording %.1f GB, growing %.1f GB a day (last finished hour), %.0f GB free: %s" % (total / 1e9, rate, free / 1e9, left)
+
+
 def raw_sections(S: dict, t0: float, t1: float, okx_feed: str, hl_feed: str) -> list:
     out = ["", "FEEDS", "  %-8s %8s %8s %7s %9s %6s %12s %12s %14s" % (
         "stream", "msgs", "bbo", "trades", "last_msg", "drops", "ws_ping_ms", "app_ping_ms", "recv-exch_ms")]
@@ -219,7 +270,7 @@ def raw_sections(S: dict, t0: float, t1: float, okx_feed: str, hl_feed: str) -> 
     out += ["", "STATE  OKX ruleType=%s (%s)   Hyperliquid growthMode=%s" % (seen(S["rule"]), conv, seen(S["growth"]))]
 
     n = int((t1 - t0) // GRID_MS)
-    grids = {f: _grid(v, t0, n) for f, v in S["mids"].items() if len(v) > 100}
+    grids = {f: _grid_cells(v, n) for f, v in S["mids"].items() if len(v) > 100}
     rets = {f: _rets(g) for f, g in grids.items()}
     out += ["", "LEAD-LAG  lag at which the correlation of %d ms returns peaks (search +-1 s)" % GRID_MS]
     feeds = sorted(rets)
@@ -240,6 +291,7 @@ def raw_sections(S: dict, t0: float, t1: float, okx_feed: str, hl_feed: str) -> 
         if gaps:
             out += ["", "PRICE GAP  OKX over Hyperliquid: median %+.1f bps, range %+.1f to %+.1f bps" % (
                 st.median(gaps), min(gaps), max(gaps))]
+    out += ["", disk_line(S["root"], t1)]
     o, hrs = S["opt"], max((t1 - t0) / 3600000.0, 1e-9)
     out += ["", "HYPE OPTIONS (OKX)  %d contracts watched" % len(o["insts"])]
     out.append("  trades per hour: %.1f   traded: %.1f HYPE in the window" % (o["trades"] / hrs, o["qty"]))
@@ -266,6 +318,7 @@ def build(cfg: dict, minutes: float, clock: str, now_ms: float | None = None, fu
         out.append("  fair view could not be updated: %s: %s" % (type(e).__name__, e))
     out += shadow_section(aggregate(cfg["fair_csv"], t0, t1), aggregate(cfg["shadow_csv"], t0, t1), t0, t1, full)
     S = scan(cfg["data_dir"], t0, t1, clock)
+    S["root"] = cfg["data_dir"]
     out += raw_sections(S, t0, t1, "okx:" + cfg["okx"]["ant_swap"], "hl:" + cfg["hl"]["ant"])
     log = cfg["conversion_log"]
     if os.path.exists(log):

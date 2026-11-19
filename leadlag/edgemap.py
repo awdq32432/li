@@ -83,7 +83,8 @@ def build(rows: list, pair: str, x: float, hold: float, lag: float, min_n: int =
     days = max((rows[-1]["signal_ts_ms"] - rows[0]["signal_ts_ms"]) / 86400000.0, 1e-9)
     n1, m1, t1 = _stat(net[:cut])
     n2, m2, t2 = _stat(net[cut:])
-    out += ["  %d trades over %.2f days. All trades: find %+.2f bps (t %+.1f), check %+.2f bps (t %+.1f)" % (len(rows), days, m1, t1, m2, t2),
+    span = "%.1f days" % days if days >= 2 else "%.1f hours" % (days * 24)
+    out += ["  %d trades over %s. All trades: find %+.2f bps (t %+.1f), check %+.2f bps (t %+.1f)" % (len(rows), span, m1, t1, m2, t2),
             "  find = earlier 60% of the data, check = later 40%. net bps is after fees.", ""]
     keep, tested = [], 0
     for name in feats[0]:
@@ -114,12 +115,18 @@ def main() -> None:
     ap.add_argument("--x", type=float, default=6, help="6 covers every signal; the move size is one of the splits")
     ap.add_argument("--hold", type=float, default=2)
     ap.add_argument("--lag", type=float, default=250)
+    ap.add_argument("--conv", help="only one conversion tag, e.g. post_conversion")
+    ap.add_argument("--hours", help="only one market-hours tag, e.g. us_regular")
     a = ap.parse_args()
     cfg = config.load(a.config)
     if not a.csv:
         from .fair import update_fair
         update_fair(cfg, verbose=True)
-    keep = lambda r: r["pair"] == a.pair and float(r["x_bps"]) == a.x and float(r["hold_s"]) == a.hold and float(r["lag_ms"]) == a.lag
+    keep = lambda r: (r["pair"] == a.pair and float(r["x_bps"]) == a.x and float(r["hold_s"]) == a.hold
+                      and float(r["lag_ms"]) == a.lag and (not a.conv or r["conv_tag"] == a.conv)
+                      and (not a.hours or r["hours_tag"] == a.hours))
+    if a.conv or a.hours:
+        print("only rows with: %s" % " ".join(x for x in (a.conv, a.hours) if x))
     print(build(load_rows(a.csv or cfg["fair_csv"], keep), a.pair, a.x, a.hold, a.lag))
 
 

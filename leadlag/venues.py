@@ -198,12 +198,14 @@ class Hyperliquid(WsVenue):
 
     def __init__(self, hub, cfg: dict):
         super().__init__(hub)
-        self.url, self.coins = cfg["ws"], cfg["coins"]
+        self.url, self.coins, self.book_coins = cfg["ws"], cfg["coins"], cfg.get("book_coins", [])
 
     async def on_open(self, ws) -> None:
         for coin in self.coins:
             for typ in ("bbo", "trades"):
                 await ws.send(json.dumps({"method": "subscribe", "subscription": {"type": typ, "coin": coin}}))
+        for coin in self.book_coins:      # depth snapshots (Hyperliquid sends one every ~12 s)
+            await ws.send(json.dumps({"method": "subscribe", "subscription": {"type": "l2Book", "coin": coin}}))
 
     async def app_ping(self, ws) -> None:
         await ws.send('{"method":"ping"}')
@@ -224,6 +226,9 @@ class Hyperliquid(WsVenue):
             for t in d:
                 norm.append({"c": "trade", "i": t["coin"], "e": t["time"], "p": _f(t["px"]),
                              "q": _f(t["sz"]), "sd": "b" if t["side"] == "B" else "s"})
+        elif ch == "l2Book":
+            side = lambda lv: [[_f(x["px"]), _f(x["sz"])] for x in lv[:10]]
+            norm.append({"c": "book", "i": d["coin"], "e": d["time"], "bids": side(d["levels"][0]), "asks": side(d["levels"][1])})
         else:
             norm.append({"c": "event", "ev": ch})
             if ch == "error":

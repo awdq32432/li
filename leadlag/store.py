@@ -115,6 +115,24 @@ def read_file(path: str, with_raw: bool = False, only: tuple | None = None) -> I
         return
 
 
+def scan_heads(root: str, stream: str, t0_ms: float, t1_ms: float) -> Iterator[tuple]:
+    """Yields (recv_ms, normalised part as text) per line, unparsed, so callers can skip cheaply."""
+    for p in hour_files(root, stream, t0_ms, t1_ms):
+        op = gzip.open if p.endswith(".gz") else open
+        try:
+            with op(p, "rt") as f:
+                for line in f:
+                    try:
+                        r = int(line[5:line.index(",", 5)]) / 1e6
+                        head = line[:line.index(',"d":')]
+                    except ValueError:
+                        continue
+                    if t0_ms <= r <= t1_ms:
+                        yield r, head
+        except (EOFError, OSError):
+            continue
+
+
 def read_events(root: str, stream: str, t0_ms: float, t1_ms: float) -> Iterator[tuple]:
     for p in hour_files(root, stream, t0_ms, t1_ms):
         for r, n in read_file(p):

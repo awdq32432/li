@@ -2,7 +2,7 @@
 
 Records public market data for the Anthropic perpetuals and runs a shadow test of
 "OKX moves, take the follower". **It places no orders, reads no keys and touches no account.**
-Version line: `leadlag-0.2.0` (separate from the Omnibook version history). The owner calls this "the OKX bot".
+Version line: `leadlag-0.2.1` (separate from the Omnibook version history). The owner calls this "the OKX bot".
 
 ## Start it on the server
 
@@ -37,7 +37,7 @@ Under `data/raw/okx_ant/<stream>/<YYYYMMDD>/<stream>_<YYYYMMDD>_<HH>.jsonl` (gzi
 |---|---|
 | `okx` | `bbo-tbt` and `trades` for `ANTHROPIC-USDT-SWAP`, `HYPE-USDT-SWAP` and `xANT-USDT` spot once OKX lists it; `index-tickers` for `ANTHROPIC-USDT` and `HYPE-USD`; `mark-price` and `funding-rate`; the instrument rules and price limits, re-pulled every minute |
 | `okx_opt` | `bbo-tbt` and `trades` for every `HYPE-USD_UM` option within 10% of the money for the nearest three expiries (re-chosen every 5 minutes), plus `opt-summary` |
-| `hl` | `bbo` and `trades` for `xyz:ANT` and `HYPE`; the `xyz:ANT` fee mode (`growthMode`) every 5 minutes |
+| `hl` | `bbo` and `trades` for `xyz:ANT` and `HYPE`; order-book depth snapshots for `xyz:ANT` (Hyperliquid sends one about every 12 s); the `xyz:ANT` fee mode (`growthMode`) every 5 minutes |
 | `binance`, `bybit`, `gate` | best bid/offer and trades for each venue's Anthropic perpetual |
 
 One line per message:
@@ -95,7 +95,7 @@ became takeable; that is believed to be the block time but has not been verified
 Per pair: signals per hour; average net bps, t-statistic and share of winners, FAIR for the last
 hour, FAIR for all time and LIVE for all time. `okx>hl` shows every combination and the split by
 market hours and by pre/post conversion; the 5 bps venues show the headline rows (`--full` shows
-everything). Then feed health and ping round trips, the lag at which cross-correlation peaks for
+everything). Then feed health and ping round trips, disk use and days of space left, the lag at which cross-correlation peaks for
 each pair of venues, the OKX to Hyperliquid price gap, and for HYPE options trades per hour, HYPE
 traded, median half-spread in % of price and the quoter's typical size.
 
@@ -104,6 +104,7 @@ traded, median half-spread in % of price and the quoter's typical size.
 ```bash
 .venv/bin/python -m leadlag.edgemap                 # okx>hl, 250 ms delay, 2 s hold, fair view
 .venv/bin/python -m leadlag.edgemap --lag 100
+.venv/bin/python -m leadlag.edgemap --lag 100 --conv post_conversion    # one regime only
 ```
 
 Splits every signal by the conditions when it fired: size of the leader's move, how far the

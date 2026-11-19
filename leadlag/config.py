@@ -24,6 +24,7 @@ DEFAULT = {
         "rest": "https://api.hyperliquid.xyz/info",
         "ant": "xyz:ANT",
         "coins": ["xyz:ANT", "HYPE"],
+        "book_coins": ["xyz:ANT"],          # order-book depth snapshots
     },
     # Other Anthropic perpetuals. A candidate symbol is used only if its price is within
     # price_tol of OKX's, which rejects wrong tickers and contracts with a different share count.
